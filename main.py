@@ -1,7 +1,7 @@
 import numpy as np
 import cv2
-from scipy.linalg import svd
 import matplotlib.pyplot as plt
+from sklearn.metrics import mean_squared_error
 
 
 def load_image(image_path):
@@ -9,17 +9,24 @@ def load_image(image_path):
     return img.astype(np.float32) / 255.0
 
 
-def power_iteration(A, num_iterations=100, epsilon=1e-8):
-    n, m = A.shape
-    x = np.random.rand(m)
+def power_iteration(A, num_iterations=1000, epsilon=1e-8):
+    n, d = A.shape
+
+    v = np.random.rand(d)
+    v = v / np.linalg.norm(v)
+
     for _ in range(num_iterations):
-        x = np.dot(A, x)
-        x_norm = np.linalg.norm(x) + epsilon
-        x /= x_norm
-    return x_norm - epsilon, x
+        Av = np.dot(A, v)
+        v_new = Av / np.linalg.norm(Av)
+        if np.abs(np.dot(v, v_new)) > 1 - epsilon:
+            break
+
+        v = v_new
+
+    return np.dot(Av, v), v
 
 
-def svd_decomposition(img_matrix, num_iterations=100, epsilon=1e-8):
+def svd_decomposition(img_matrix, num_iterations=50, epsilon=1e-8):
     A = img_matrix
     ATA = np.dot(A.T, A)
     n, m = A.shape
@@ -29,10 +36,14 @@ def svd_decomposition(img_matrix, num_iterations=100, epsilon=1e-8):
 
     for i in range(m):
         s, v = power_iteration(ATA, num_iterations, epsilon)
+        if s < 0:
+            break
         S[i] = np.sqrt(s)
         Vt[i] = v
         ATA = ATA - s * np.outer(v, v)
-        u = np.dot(A, v) / (S[i] + epsilon)
+        if S[i] < epsilon:
+            break
+        u = np.dot(A, v) / S[i]
         U[:, i] = u
         A = A - np.outer(u, np.dot(S[i], v))
 
@@ -50,10 +61,27 @@ def denoise_image(U, s, Vt, threshold):
     s_denoised = np.where(s > threshold, s, 0)
     return U, s_denoised, Vt
 
+def iterative_denoise(image, initial_threshold, threshold_step, max_iterations, target_mse):
+    U, s, Vt = svd_decomposition(image)
+
+    threshold = initial_threshold
+    for iteration in range(max_iterations):
+        U_denoised, s_denoised, Vt_denoised = denoise_image(U, s, Vt, threshold)
+        denoised_image = reconstruct_image(U_denoised, s_denoised, Vt_denoised)
+
+        mse = mean_squared_error(image.flatten(), denoised_image.flatten())
+        print(f"Iteration {iteration + 1}, MSE: {mse}, Threshold: {threshold}")
+
+        if mse <= target_mse:
+            print("Target MSE reached. Stopping.")
+            break
+
+        threshold += threshold_step
+
+    return denoised_image, threshold
 
 def reconstruct_image(U, s, Vt):
     return np.dot(U, np.dot(np.diag(s), Vt))
-
 
 def save_image(img_matrix, output_path):
     img_matrix = np.clip(img_matrix, 0, 1) * 255
@@ -71,35 +99,30 @@ def visualize_images(original, compressed, denoised):
     plt.show()
 
 
-def main(image_path, compressed_output_path, denoised_output_path, rank, denoising_threshold):
-    # Load and preprocess the image
+if __name__ == "__main__":
+
+    image_path = "/Users/oleksijkonopada/Desktop/UCU/Linear_Algebra/Linear_project/672353.fig.007b.jpg"
+    compressed_output_path = "/Users/oleksijkonopada/Desktop/UCU/Linear_Algebra/Linear_project/compressed.jpg"
+    denoised_output_path = "/Users/oleksijkonopada/Desktop/UCU/Linear_Algebra/Linear_project/denoised.jpg"
+
     img = load_image(image_path)
 
-    # Perform SVD decomposition
     U, s, Vt = svd_decomposition(img)
-
-    # Compress the image
+    print(s)
+    rank = round(len(s) * 0.02)
+    print(rank)
     U_compressed, s_compressed, Vt_compressed = compress_image(U, s, Vt, rank)
 
-    # Denoise the image
-    U_denoised, s_denoised, Vt_denoised = denoise_image(U, s, Vt, denoising_threshold)
+    initial_threshold = 1.0
+    threshold_step = 0.5
+    max_iterations = 20
+    target_mse = 0.01
 
-    # Reconstruct the images
+    img_denoised, final_threshold = iterative_denoise(img, initial_threshold, threshold_step, max_iterations, target_mse)
+
     img_compressed = reconstruct_image(U_compressed, s_compressed, Vt_compressed)
-    img_denoised = reconstruct_image(U_denoised, s_denoised, Vt_denoised)
 
-    # Save the compressed and denoised images
     save_image(img_compressed, compressed_output_path)
     save_image(img_denoised, denoised_output_path)
 
-    # Visualize the original, compressed, and denoised images
     visualize_images(img, img_compressed, img_denoised)
-
-
-if __name__ == '__main__':
-    image_path = '/Users/oleksijkonopada/Desktop/UCU/Linear_Algebra/Linear_project/golden-retriever-royalty-free-image-506756303-1560962726.jpeg'
-    compressed_output_path = '/Users/oleksijkonopada/Desktop/UCU/Linear_Algebra/Linear_project/compressed.jpeg'
-    denoised_output_path = '/Users/oleksijkonopada/Desktop/UCU/Linear_Algebra/Linear_project/denoised.jpeg'
-    rank = 10
-    denoising_threshold = 0.3
-    main(image_path, compressed_output_path, denoised_output_path, rank, denoising_threshold)
